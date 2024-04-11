@@ -1,0 +1,858 @@
+import {
+    Renderer,
+    TextureLoader,
+    Orbit,
+    Program,
+    Transform,
+    Vec3,
+    Polyline,
+    Color,
+    Camera,
+    Mesh,
+    Vec2,
+    Post,
+    Box,
+    NormalProgram,
+    Texture,
+    GLTFLoader,
+} from "ogl";
+
+const fragment = /* gjlsl */ `
+                precision highp float;
+
+                uniform sampler2D tMap;
+                uniform float uCharactersCount;
+                uniform sampler2D uCharacters;
+                uniform vec2 uResolution;
+                varying vec2 vUv;
+
+                const vec2 SIZE = vec2(16.);
+
+                vec3 greyscale(vec3 color, float strength) {
+                    float g = dot(color, vec3(0.299, 0.587, 0.114));
+                    return mix(color, vec3(g), strength);
+                }
+
+                vec3 greyscale(vec3 color) {
+                    return greyscale(color, 1.0);
+                }
+
+
+                void main() {
+                    vec2 cell = uResolution / 30.0;
+                    vec2 grid = 1.0 / cell;
+                    vec2 pixelizedUV = grid * (0.5 + floor(vUv / grid));
+                    vec4 pixelized = texture2D(tMap, pixelizedUV);
+                    float greyscaled = 1.0 - greyscale(pixelized.rgb).r;
+                    // vec4 raw = texture2D(tMap, vUv);
+
+                    float characterIndex = floor((uCharactersCount - 1.0) * greyscaled);
+                    vec2 characterPosition = vec2(mod(characterIndex, SIZE.x), floor(characterIndex / SIZE.y));
+                    vec2 offset = vec2(characterPosition.x, -characterPosition.y) / SIZE;
+                    vec2 charUV = mod(vUv * (cell / SIZE), 1.0 / SIZE) - vec2(0., 1.0 / SIZE) + offset;
+                    vec4 asciiCharacter = texture2D(uCharacters, charUV);
+
+                    asciiCharacter.rgb = pixelized.rgb *  asciiCharacter.r;
+                    asciiCharacter.a = pixelized.a; 
+                    gl_FragColor = asciiCharacter;
+                }
+            `;
+
+const vertex = `
+            attribute vec3 position;
+            attribute vec3 next;
+            attribute vec3 prev;
+            attribute vec2 uv;
+            attribute float side;
+
+            uniform vec2 uResolution;
+            uniform float uDPR;
+            uniform float uThickness;
+
+            varying vec2 vUv;
+            varying vec3 vPosition;
+
+            float random(vec2 st) {
+                return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123) / 43758.5453123;
+            }
+
+            vec4 getPosition() {
+                vec2 aspect = vec2(uResolution.x / uResolution.y, 1);
+                vec2 nextScreen = next.xy * aspect;
+                vec2 prevScreen = prev.xy * aspect;
+
+                vec2 tangent = normalize(nextScreen - prevScreen);
+                vec2 normal = vec2(-tangent.y, tangent.x);
+                normal /= aspect;
+                normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
+
+                float pixelWidth = 1.0 / (uResolution.y / uDPR);
+                normal *= pixelWidth * uThickness;
+
+                // When the points are on top of each other, shrink the line to avoid artifacts.
+                float dist = length(nextScreen - prevScreen);
+                normal *= smoothstep(0.0, 0.02, dist);
+
+                vec4 current = vec4(position, 1);
+                current.xy -= normal * side;
+                return current;
+            }
+
+            void main() {
+                vUv = uv;
+                vec4 pos = getPosition();
+                vPosition = pos.xyz;
+                gl_Position = pos;
+            }
+        `;
+
+const shader = {
+    vertex: /* glsl */ `
+                    attribute vec3 position;
+
+                    #ifdef UV
+                        attribute vec2 uv;
+                    #else
+                        const vec2 uv = vec2(0);
+                    #endif
+
+                    #ifdef NORMAL
+                        attribute vec3 normal;
+                    #else
+                        const vec3 normal = vec3(0);
+                    #endif
+
+                    #ifdef INSTANCED
+                        attribute mat4 instanceMatrix;
+                    #endif
+
+                    #ifdef SKINNING
+                        attribute vec4 skinIndex;
+                        attribute vec4 skinWeight;
+                    #endif
+
+                    uniform mat4 modelViewMatrix;
+                    uniform mat4 projectionMatrix;
+                    uniform mat4 modelMatrix;
+                    uniform mat3 normalMatrix;
+
+                    #ifdef SKINNING
+                        uniform sampler2D boneTexture;
+                        uniform int boneTextureSize;
+                    #endif
+
+                    varying vec2 vUv;
+                    varying vec3 vNormal;
+                    varying vec3 vMPos;
+                    varying vec4 vMVPos;
+
+                    #ifdef SKINNING
+                        mat4 getBoneMatrix(const in float i) {
+                            float j = i * 4.0;
+                            float x = mod(j, float(boneTextureSize));
+                            float y = floor(j / float(boneTextureSize));
+
+                            float dx = 1.0 / float(boneTextureSize);
+                            float dy = 1.0 / float(boneTextureSize);
+
+                            y = dy * (y + 0.5);
+
+                            vec4 v1 = texture2D(boneTexture, vec2(dx * (x + 0.5), y));
+                            vec4 v2 = texture2D(boneTexture, vec2(dx * (x + 1.5), y));
+                            vec4 v3 = texture2D(boneTexture, vec2(dx * (x + 2.5), y));
+                            vec4 v4 = texture2D(boneTexture, vec2(dx * (x + 3.5), y));
+
+                            return mat4(v1, v2, v3, v4);
+                        }
+
+                        void skin(inout vec4 pos, inout vec3 nml) {
+                            mat4 boneMatX = getBoneMatrix(skinIndex.x);
+                            mat4 boneMatY = getBoneMatrix(skinIndex.y);
+                            mat4 boneMatZ = getBoneMatrix(skinIndex.z);
+                            mat4 boneMatW = getBoneMatrix(skinIndex.w);
+
+                            // update normal
+                            mat4 skinMatrix = mat4(0.0);
+                            skinMatrix += skinWeight.x * boneMatX;
+                            skinMatrix += skinWeight.y * boneMatY;
+                            skinMatrix += skinWeight.z * boneMatZ;
+                            skinMatrix += skinWeight.w * boneMatW;
+                            nml = vec4(skinMatrix * vec4(nml, 0.0)).xyz;
+
+                            // Update position
+                            vec4 transformed = vec4(0.0);
+                            transformed += boneMatX * pos * skinWeight.x;
+                            transformed += boneMatY * pos * skinWeight.y;
+                            transformed += boneMatZ * pos * skinWeight.z;
+                            transformed += boneMatW * pos * skinWeight.w;
+                            pos = transformed;
+                        }
+                    #endif
+
+                    void main() {
+                        vec4 pos = vec4(position, 1);
+                        vec3 nml = normal;
+
+                        #ifdef SKINNING
+                            skin(pos, nml);
+                        #endif
+
+                        #ifdef INSTANCED
+                            pos = instanceMatrix * pos;
+
+                            mat3 m = mat3(instanceMatrix);
+                            nml /= vec3(dot(m[0], m[0]), dot(m[1], m[1]), dot(m[2], m[2]));
+                            nml = m * nml;
+                        #endif
+
+                        vUv = uv;
+                        vNormal = normalize(nml);
+
+                        vec4 mPos = modelMatrix * pos;
+                        vMPos = mPos.xyz / mPos.w;
+                        vMVPos = modelViewMatrix * pos;
+
+                        gl_Position = projectionMatrix * vMVPos;
+                    }
+                `,
+
+    fragment: /* glsl */ `
+                    uniform mat4 viewMatrix;
+                    uniform vec3 cameraPosition;
+
+                    uniform vec4 uBaseColorFactor;
+                    uniform sampler2D tBaseColor;
+
+                    uniform sampler2D tRM;
+                    uniform float uRoughness;
+                    uniform float uMetallic;
+
+                    uniform sampler2D tNormal;
+                    uniform float uNormalScale;
+
+                    uniform sampler2D tEmissive;
+                    uniform vec3 uEmissive;
+
+                    uniform sampler2D tOcclusion;
+
+                    uniform sampler2D tLUT;
+                    uniform sampler2D tEnvDiffuse;
+                    uniform sampler2D tEnvSpecular;
+                    uniform float uEnvDiffuse;
+                    uniform float uEnvSpecular;
+
+                    uniform vec3 uLightDirection;
+                    uniform vec3 uLightColor;
+
+                    uniform float uAlpha;
+                    uniform float uAlphaCutoff;
+
+                    varying vec2 vUv;
+                    varying vec3 vNormal;
+                    varying vec3 vMPos;
+                    varying vec4 vMVPos;
+
+                    const float PI = 3.14159265359;
+                    const float RECIPROCAL_PI = 0.31830988618;
+                    const float RECIPROCAL_PI2 = 0.15915494;
+                    const float LN2 = 0.6931472;
+
+                    const float ENV_LODS = 6.0;
+
+                    vec4 SRGBtoLinear(vec4 srgb) {
+                        vec3 linOut = pow(srgb.xyz, vec3(2.2));
+                        return vec4(linOut, srgb.w);
+                    }
+
+                    vec4 RGBMToLinear(in vec4 value) {
+                        float maxRange = 6.0;
+                        return vec4(value.xyz * value.w * maxRange, 1.0);
+                    }
+
+                    vec3 linearToSRGB(vec3 color) {
+                        return pow(color, vec3(1.0 / 2.2));
+                    }
+
+                    vec3 getNormal() {
+                        #ifdef NORMAL_MAP
+                            vec3 pos_dx = dFdx(vMPos.xyz);
+                            vec3 pos_dy = dFdy(vMPos.xyz);
+                            vec2 tex_dx = dFdx(vUv);
+                            vec2 tex_dy = dFdy(vUv);
+
+                            // Tangent, Bitangent
+                            vec3 t = normalize(pos_dx * tex_dy.t - pos_dy * tex_dx.t);
+                            vec3 b = normalize(-pos_dx * tex_dy.s + pos_dy * tex_dx.s);
+                            mat3 tbn = mat3(t, b, normalize(vNormal));
+
+                            vec3 n = texture2D(tNormal, vUv).rgb * 2.0 - 1.0;
+                            n.xy *= uNormalScale;
+                            vec3 normal = normalize(tbn * n);
+
+                            // Get world normal from view normal (normalMatrix * normal)
+                            // return normalize((vec4(normal, 0.0) * viewMatrix).xyz);
+                            return normalize(normal);
+                        #else
+                            return normalize(vNormal);
+                        #endif
+                    }
+
+                    vec3 specularReflection(vec3 specularEnvR0, vec3 specularEnvR90, float VdH) {
+                        return specularEnvR0 + (specularEnvR90 - specularEnvR0) * pow(clamp(1.0 - VdH, 0.0, 1.0), 5.0);
+                    }
+
+                    float geometricOcclusion(float NdL, float NdV, float roughness) {
+                        float r = roughness;
+
+                        float attenuationL = 2.0 * NdL / (NdL + sqrt(r * r + (1.0 - r * r) * (NdL * NdL)));
+                        float attenuationV = 2.0 * NdV / (NdV + sqrt(r * r + (1.0 - r * r) * (NdV * NdV)));
+                        return attenuationL * attenuationV;
+                    }
+
+                    float microfacetDistribution(float roughness, float NdH) {
+                        float roughnessSq = roughness * roughness;
+                        float f = (NdH * roughnessSq - NdH) * NdH + 1.0;
+                        return roughnessSq / (PI * f * f);
+                    }
+
+                    vec2 cartesianToPolar(vec3 n) {
+                        vec2 uv;
+                        uv.x = atan(n.z, n.x) * RECIPROCAL_PI2 + 0.5;
+                        uv.y = asin(n.y) * RECIPROCAL_PI + 0.5;
+                        return uv;
+                    }
+
+                    void getIBLContribution(inout vec3 diffuse, inout vec3 specular, float NdV, float roughness, vec3 n, vec3 reflection, vec3 diffuseColor, vec3 specularColor) {
+                        vec3 brdf = SRGBtoLinear(texture2D(tLUT, vec2(NdV, roughness))).rgb;
+
+                        vec3 diffuseLight = RGBMToLinear(texture2D(tEnvDiffuse, cartesianToPolar(n))).rgb;
+                        diffuseLight = mix(vec3(1), diffuseLight, uEnvDiffuse);
+
+                        // Sample 2 levels and mix between to get smoother degradation
+                        float blend = roughness * ENV_LODS;
+                        float level0 = floor(blend);
+                        float level1 = min(ENV_LODS, level0 + 1.0);
+                        blend -= level0;
+
+                        // Sample the specular env map atlas depending on the roughness value
+                        vec2 uvSpec = cartesianToPolar(reflection);
+                        uvSpec.y /= 2.0;
+
+                        vec2 uv0 = uvSpec;
+                        vec2 uv1 = uvSpec;
+
+                        uv0 /= pow(2.0, level0);
+                        uv0.y += 1.0 - exp(-LN2 * level0);
+
+                        uv1 /= pow(2.0, level1);
+                        uv1.y += 1.0 - exp(-LN2 * level1);
+
+                        vec3 specular0 = RGBMToLinear(texture2D(tEnvSpecular, uv0)).rgb;
+                        vec3 specular1 = RGBMToLinear(texture2D(tEnvSpecular, uv1)).rgb;
+                        vec3 specularLight = mix(specular0, specular1, blend);
+
+                        diffuse = diffuseLight * diffuseColor;
+
+                        // Bit of extra reflection for smooth materials
+                        float reflectivity = pow((1.0 - roughness), 2.0) * 0.05;
+                        specular = specularLight * (specularColor * brdf.x + brdf.y + reflectivity);
+                        specular *= uEnvSpecular;
+                    }
+
+                    void main() {
+                        vec4 baseColor = uBaseColorFactor;
+                        #ifdef COLOR_MAP
+                            baseColor *= SRGBtoLinear(texture2D(tBaseColor, vUv));
+                        #endif
+
+                        // Get base alpha
+                        float alpha = baseColor.a;
+
+                        #ifdef ALPHA_MASK
+                            if (alpha < uAlphaCutoff) discard;
+                        #endif
+
+                        // RM map packed as gb = [nothing, roughness, metallic, nothing]
+                        vec4 rmSample = vec4(1);
+                        #ifdef RM_MAP
+                            rmSample *= texture2D(tRM, vUv);
+                        #endif
+                        float roughness = clamp(rmSample.g * uRoughness, 0.04, 1.0);
+                        float metallic = clamp(rmSample.b * uMetallic, 0.04, 1.0);
+
+                        vec3 f0 = vec3(0.04);
+                        vec3 diffuseColor = baseColor.rgb * (vec3(1.0) - f0) * (1.0 - metallic);
+                        vec3 specularColor = mix(f0, baseColor.rgb, metallic);
+
+                        vec3 specularEnvR0 = specularColor;
+                        vec3 specularEnvR90 = vec3(clamp(max(max(specularColor.r, specularColor.g), specularColor.b) * 25.0, 0.0, 1.0));
+
+                        vec3 N = getNormal();
+                        vec3 V = normalize(cameraPosition - vMPos);
+                        vec3 L = normalize(uLightDirection);
+                        vec3 H = normalize(L + V);
+                        vec3 reflection = normalize(reflect(-V, N));
+
+                        float NdL = clamp(dot(N, L), 0.001, 1.0);
+                        float NdV = clamp(abs(dot(N, V)), 0.001, 1.0);
+                        float NdH = clamp(dot(N, H), 0.0, 1.0);
+                        float LdH = clamp(dot(L, H), 0.0, 1.0);
+                        float VdH = clamp(dot(V, H), 0.0, 1.0);
+
+                        vec3 F = specularReflection(specularEnvR0, specularEnvR90, VdH);
+                        float G = geometricOcclusion(NdL, NdV, roughness);
+                        float D = microfacetDistribution(roughness, NdH);
+
+                        vec3 diffuseContrib = (1.0 - F) * (diffuseColor / PI);
+                        vec3 specContrib = F * G * D / (4.0 * NdL * NdV);
+
+                        // Shading based off lights
+                        vec3 color = NdL * uLightColor * (diffuseContrib + specContrib);
+
+                        // Add lights spec to alpha for reflections on transparent surfaces (glass)
+                        alpha = max(alpha, max(max(specContrib.r, specContrib.g), specContrib.b));
+
+                        // Calculate IBL lighting
+                        vec3 diffuseIBL;
+                        vec3 specularIBL;
+                        getIBLContribution(diffuseIBL, specularIBL, NdV, roughness, N, reflection, diffuseColor, specularColor);
+
+                        // Add IBL on top of color
+                        color += diffuseIBL + specularIBL;
+
+                        // Add IBL spec to alpha for reflections on transparent surfaces (glass)
+                        alpha = max(alpha, max(max(specularIBL.r, specularIBL.g), specularIBL.b));
+
+                        #ifdef OCC_MAP
+                            // TODO: figure out how to apply occlusion
+                            // color *= SRGBtoLinear(texture2D(tOcclusion, vUv)).rgb;
+                        #endif
+
+                        #ifdef EMISSIVE_MAP
+                            vec3 emissive = SRGBtoLinear(texture2D(tEmissive, vUv)).rgb * uEmissive;
+                            color += emissive;
+                        #endif
+
+                        // Convert to sRGB to display
+                        gl_FragColor.rgb = vec3(1.0,1.0,1.0);
+
+                        // Apply uAlpha uniform at the end to overwrite any specular additions on transparent surfaces
+                        gl_FragColor.a = alpha * uAlpha;
+                    }
+                `,
+};
+{
+    const renderer = new Renderer({ dpr: 2 });
+    const gl = renderer.gl;
+    document.body.appendChild(gl.canvas);
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+
+    const post = new Post(gl);
+    const resolution = { value: new Vec2() };
+
+    const lines = [];
+
+    const camera = new Camera(gl, { near: 1, far: 1000 });
+    camera.position.set(0, 0, -10);
+    // camera.position.set(2,2, 2);
+    const controls = new Orbit(camera);
+
+    function resize() {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        post.resize();
+        lines.forEach((line) => line.polyline.resize());
+        camera.perspective({ aspect: gl.canvas.width / gl.canvas.height });
+        resolution.value.set(gl.canvas.width, gl.canvas.height);
+    }
+    window.addEventListener("resize", resize, false);
+    resize();
+
+    const scene = new Transform();
+
+    let gltf;
+
+    // textures
+    const lutTexture = TextureLoader.load(gl, {
+        src: "assets/lut.png",
+    });
+    const envDiffuseTexture = TextureLoader.load(gl, {
+        src: "assets/sunset-diffuse-RGBM.png",
+    });
+    const envSpecularTexture = TextureLoader.load(gl, {
+        src: "assets/sunset-specular-RGBM.png",
+    });
+
+    async function loadGltf() {
+        gltf = await GLTFLoader.load(gl, `./assci.glb`);
+        addGLTF(gltf);
+    }
+    // loadGltf();
+
+    function addGLTF(gltf) {
+    scene.children.forEach((child) => child.setParent(null));
+    console.log(gltf);
+
+    const s = gltf.scene || gltf.scenes[0];
+    s.forEach((root) => {
+      root.setParent(scene);
+      root.traverse((node) => {
+        if (node.program) {
+          node.program = createProgram(node);
+        }
+      });
+    });
+
+    // Calculate world matrices for bounds
+    scene.updateMatrixWorld();
+
+    // Calculate rough world bounds to update camera
+    const min = new Vec3(+Infinity);
+    const max = new Vec3(-Infinity);
+    const center = new Vec3();
+    const scale = new Vec3();
+
+    const boundsMin = new Vec3();
+    const boundsMax = new Vec3();
+    const boundsCenter = new Vec3();
+    const boundsScale = new Vec3();
+
+    gltf.meshes.forEach((group) => {
+      group.primitives.forEach((mesh) => {
+        if (!mesh.parent) return; // Skip unattached
+
+        // TODO: for skins, go over joints, not mesh
+        // if (mesh instanceof GLTFSkin) return; // Skip skinned geometry
+        if (!mesh.geometry.bounds) mesh.geometry.computeBoundingSphere();
+
+        boundsCenter.copy(mesh.geometry.bounds.center).applyMatrix4(mesh.worldMatrix);
+
+        // Get max world scale axis
+        mesh.worldMatrix.getScaling(boundsScale);
+        const radiusScale = Math.max(Math.max(boundsScale[0], boundsScale[1]), boundsScale[2]);
+        const radius = mesh.geometry.bounds.radius * radiusScale;
+
+        boundsMin.set(-radius).add(boundsCenter);
+        boundsMax.set(+radius).add(boundsCenter);
+
+        // Apply world matrix to bounds
+        for (let i = 0; i < 3; i++) {
+          min[i] = Math.min(min[i], boundsMin[i]);
+          max[i] = Math.max(max[i], boundsMax[i]);
+        }
+      });
+    });
+    scale.sub(max, min);
+    const maxRadius = Math.max(Math.max(scale[0], scale[1]), scale[2]) * 0.5;
+    center.add(min, max).divide(2);
+
+    camera.position
+      .set(1, 0.5, -1)
+      .normalize()
+      .multiply(maxRadius * 2.5)
+      .add(center);
+    controls.target.copy(center);
+    controls.forcePosition();
+    const far = maxRadius * 5;
+    const near = far * 0.001;
+    camera.perspective({ near, far });
+  }
+    function createProgram(node) {
+    const gltf = node.program.gltfMaterial || {};
+    let { vertex, fragment } = shader;
+
+    const vertexPrefix = renderer.isWebgl2
+      ? /* glsl */ `#version 300 es
+                        #define attribute in
+                        #define varying out
+                        #define texture2D texture
+                    `
+      : ``;
+
+    const fragmentPrefix = renderer.isWebgl2
+      ? /* glsl */ `#version 300 es
+                        precision highp float;
+                        #define varying in
+                        #define texture2D texture
+                        #define gl_FragColor FragColor
+                        out vec4 FragColor;
+                    `
+      : /* glsl */ `#extension GL_OES_standard_derivatives : enable
+                        precision highp float;
+                    `;
+
+    let defines = `
+                        ${node.geometry.attributes.uv ? `#define UV` : ``}
+                        ${node.geometry.attributes.normal ? `#define NORMAL` : ``}
+                        ${node.geometry.isInstanced ? `#define INSTANCED` : ``}
+                        ${node.boneTexture ? `#define SKINNING` : ``}
+                        ${gltf.alphaMode === "MASK" ? `#define ALPHA_MASK` : ``}
+                        ${gltf.baseColorTexture ? `#define COLOR_MAP` : ``}
+                        ${gltf.normalTexture ? `#define NORMAL_MAP` : ``}
+                        ${gltf.metallicRoughnessTexture ? `#define RM_MAP` : ``}
+                        ${gltf.occlusionTexture ? `#define OCC_MAP` : ``}
+                        ${gltf.emissiveTexture ? `#define EMISSIVE_MAP` : ``}
+                    `;
+
+    vertex = vertexPrefix + defines + vertex;
+    fragment = fragmentPrefix + defines + fragment;
+
+    const program = new Program(gl, {
+      vertex,
+      fragment,
+      uniforms: {
+        uBaseColorFactor: { value: gltf.baseColorFactor || [1, 1, 1, 1] },
+        tBaseColor: { value: gltf.baseColorTexture ? gltf.baseColorTexture.texture : null },
+
+        tRM: { value: gltf.metallicRoughnessTexture ? gltf.metallicRoughnessTexture.texture : null },
+        uRoughness: { value: gltf.roughnessFactor !== undefined ? gltf.roughnessFactor : 1 },
+        uMetallic: { value: gltf.metallicFactor !== undefined ? gltf.metallicFactor : 1 },
+
+        tNormal: { value: gltf.normalTexture ? gltf.normalTexture.texture : null },
+        uNormalScale: { value: gltf.normalTexture ? gltf.normalTexture.scale || 1 : 1 },
+
+        tOcclusion: { value: gltf.occlusionTexture ? gltf.occlusionTexture.texture : null },
+
+        tEmissive: { value: gltf.emissiveTexture ? gltf.emissiveTexture.texture : null },
+        uEmissive: { value: gltf.emissiveFactor || [0, 0, 0] },
+
+        tLUT: { value: lutTexture },
+        tEnvDiffuse: { value: envDiffuseTexture },
+        tEnvSpecular: { value: envSpecularTexture },
+        uEnvDiffuse: { value: 0.5 },
+        uEnvSpecular: { value: 0.5 },
+
+        uLightDirection: { value: new Vec3(0, 1, 1) },
+        uLightColor: { value: new Vec3(2.5) },
+
+        uAlpha: { value: 1 },
+        uAlphaCutoff: { value: gltf.alphaCutoff },
+      },
+      transparent: gltf.alphaMode === "BLEND",
+      cullFace: gltf.doubleSided ? false : gl.BACK,
+    });
+
+    return program;
+  }
+
+    function random(a, b) {
+        const alpha = Math.random();
+        return a * (1.0 - alpha) + b * alpha;
+    }
+
+    ["blue", "red", "green", "cyan", "cyan"].forEach((color, i) => {
+       const line = {
+            spring: random(0.02, 0.8),
+            friction: random(0.7, 0.95),
+            mouseVelocity: new Vec3(),
+            mouseOffset: new Vec3(random(-1, 1) * 0.05),
+        };
+        const count = 40;
+        const points = (line.points = []);
+        for (let i = 0; i < count; i++) points.push(new Vec3());
+
+        line.polyline = new Polyline(gl, {
+            points,
+            vertex,
+            fragment: `
+            precision highp float;
+            varying vec2 vUv;
+            uniform vec2 uResolution;
+            varying vec3 vPosition;
+            uniform sampler2D tMap;
+            void main(){
+                  // vec2 uv = vPosition.xy / uResolution;
+
+                // Calculate distance from the center
+                vec2 center = vec2(0.5);
+                float distance = length(vUv - center);
+
+                // Define gradient colors
+                vec3 startColor = vec3(1.0, 1.0, 1.); // Red
+                vec3 endColor = vec3(0.0, 0.0, 0.0);   // Blue
+
+                // Calculate the interpolation factor based on distance
+                float fadeFactor = mix(0.0, 1.0, distance); // Adjust these values for the desired fade range
+
+                // Interpolate between start and end colors
+                vec3 color = mix(startColor, endColor, fadeFactor);
+                color *= vec3(0., 1.,1.);
+
+
+                // Output final color
+                gl_FragColor = vec4(color, 1.0);
+            }`,
+            uniforms: {
+                // uColor: { value: new Color(color) },
+                uThickness: { value: random(20, 100) },
+                uResolution: { value: new Vec2(window.innerWidth, window.innerHeight) },
+            },
+        });
+
+        line.polyline.mesh.setParent(scene);
+
+        lines.push(line);
+    });
+
+    // ascii stuff
+    const characters = [..."@MBHENR#KWXDFPQASUZbdehx*8Gm&04LOVYkpq5Tagns69owz$CIu23Jcfry%1v7l+it[] {}?j|()=~!-/<>\"^_';,:`.."];
+    // characters.reverse();
+    // const characters = " .:,'-^=*+?!|0#X%WM@"
+    const fontSize = 54;
+    const tex = createCharactersTexture(characters, fontSize);
+    function createCharactersTexture(characters, fontSize) {
+        const canvas = document.createElement("canvas");
+
+        const SIZE = 1024;
+        const MAX_PER_ROW = 16;
+        const CELL = SIZE / MAX_PER_ROW;
+
+        canvas.width = canvas.height = SIZE;
+
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+            throw new Error("Context not available");
+        }
+
+        context.clearRect(0, 0, SIZE, SIZE);
+        context.font = `${fontSize}px arial`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillStyle = "#fff";
+
+        for (let i = 0; i < characters.length; i++) {
+            const char = characters[i];
+            const x = i % MAX_PER_ROW;
+            const y = Math.floor(i / MAX_PER_ROW);
+
+            context.fillText(char, x * CELL + CELL / 2, y * CELL + CELL / 2);
+        }
+
+        const canvasData = context.getImageData(0, 0, SIZE, SIZE);
+        const texture = new Texture(gl, {
+            image: canvasData.data,
+            width: SIZE,
+            height: SIZE,
+            wrapS: gl.TEXTURE_WRAP_S,
+            wrapT: gl.TEXTURE_WRAP_T,
+            magFilter: gl.NEAREST,
+            minFilter: gl.NEAREST,
+        });
+
+        return texture;
+    }
+
+    post.addPass({
+        fragment,
+        uniforms: {
+            uResolution: resolution,
+            uCharacters: { value: tex },
+            uCharactersCount: { value: characters.length },
+        },
+    });
+
+    const mouse = new Vec3();
+    if ("ontouchstart" in window) {
+        window.addEventListener("touchstart", updateMouse, false);
+        window.addEventListener("touchmove", updateMouse, false);
+    } else {
+        window.addEventListener("mousemove", updateMouse, false);
+    }
+
+    function updateMouse(e) {
+        if (e.changedTouches && e.changedTouches.length) {
+            e.x = e.changedTouches[0].pageX;
+            e.y = e.changedTouches[0].pageY;
+        }
+        if (e.x === undefined) {
+            e.x = e.pageX;
+            e.y = e.pageY;
+        }
+
+        // Get mouse value in -1 to 1 range, with y flipped
+        mouse.set((e.x / gl.renderer.width) * 2 - 1, (e.y / gl.renderer.height) * -2 + 1, 0);
+    }
+    let mesh;
+async function initScene() {
+    // const geometry = new Box(gl);
+    const gltf = await GLTFLoader.load(gl, './assci.glb');
+    console.log(gltf.meshes[0].primitives[0].geometry)
+    const geometry = gltf.meshes[0].primitives[0].geometry;
+    console.log(gltf.meshes[0].primitives[0].rotation)
+    
+    const program = new Program(gl, {
+      vertex: /* glsl */ `
+                            attribute vec3 position;
+                            attribute vec3 normal;
+                            attribute vec2 uv;
+                            uniform mat4 modelViewMatrix;
+                            uniform mat4 projectionMatrix;
+
+                            varying vec2 vUv;
+                            varying vec3 vNormal;
+
+                            void main() {
+                                vUv = uv;
+                                vNormal = normal;
+                                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
+                            }
+                        `,
+      fragment: /* glsl */ `
+                            precision highp float;
+
+                            varying vec2 vUv;
+                            varying vec3 vNormal;
+                            void main() {
+                                vec3 cyan = vec3(0., 1., 1.);
+                                vec3 white = vec3(1., 1., 1.);
+                                vec3 yellow = vec3(0.2, 0.2, 0.2);
+                                vec3 black = vec3(0., 0., 0.4);
+                                vec3 color = mix(white, yellow, smoothstep(0., 1., length(vUv)));
+                                // color += mix(white, yellow, smoothstep(0., 1., 1. - vUv.y));
+                                // color += mix(white, yellow, smoothstep(0., 1., vUv.y));
+                                color += dot(vNormal, black);
+                                color *= cyan; 
+                                gl_FragColor = vec4(color, 1.0);
+                            }
+                        `,
+    });
+    mesh = new Mesh(gl, { geometry, program });
+        // mesh.rotation.x = -Math.PI;
+        // mesh.rotation.set( gltf.meshes[0].primitives[0].rotation)
+        const DEG2RAD = 180 / Math.PI
+        
+    mesh.rotation.x = 93 * DEG2RAD
+    mesh.rotation.x = -45  * DEG2RAD
+        mesh.rotation.z = 137 * DEG2RAD  
+    mesh.setParent(scene);
+  }
+    initScene()
+
+    requestAnimationFrame(update);
+
+    const tmp = new Vec3();
+    function update() {
+        requestAnimationFrame(update);
+        lines.forEach((line) => {
+            // Update polyline input points
+            for (let i = line.points.length - 1; i >= 0; i--) {
+                if (!i) {
+                    // For the first point, spring ease it to the mouse position
+                    tmp.copy(mouse).add(line.mouseOffset).sub(line.points[i]).multiply(line.spring);
+                    line.mouseVelocity.add(tmp).multiply(line.friction);
+                    line.points[i].add(line.mouseVelocity );
+                } else {
+                    // The rest of the points ease to the point in front of them, making a line
+                    line.points[i].lerp(line.points[i - 1], 0.9);
+                }
+            }
+            line.polyline.updateGeometry();
+        });
+
+        // Replace Renderer.render with post.render. Use the same arguments.
+        controls.update();
+        if(mesh.rotation){ mesh.rotation.y += 0.01}
+        post.render({ scene, camera, sort: false, frustumCull: false });
+        // renderer.render({ scene, camera, sort: false, frustumCull: false });
+    }
+}

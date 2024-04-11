@@ -1,0 +1,7 @@
+{
+	"dependencies": {
+		"ogl": "^1.0.6",
+		"postprocessing": "^6.35.3",
+		"three": "^0.163.0"
+	}
+}

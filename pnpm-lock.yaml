@@ -1,0 +1,35 @@
+lockfileVersion: '6.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+dependencies:
+  ogl:
+    specifier: ^1.0.6
+    version: 1.0.6
+  postprocessing:
+    specifier: ^6.35.3
+    version: 6.35.3(three@0.163.0)
+  three:
+    specifier: ^0.163.0
+    version: 0.163.0
+
+packages:
+
+  /ogl@1.0.6:
+    resolution: {integrity: sha512-ephp/AP2qR2JV/BLoFEoeMSs6JofFZIx3nB6iLKfom88Q3GFjFLXwFjW0ZQObHJaWHhmNGPcMi1n1nxUm+30TA==}
+    dev: false
+
+  /postprocessing@6.35.3(three@0.163.0):
+    resolution: {integrity: sha512-PH0/gqVYpp+vZjmSAohG/xH0u9FpbjfCGsFMsmsZVd8XXSmqJUR7b5C9ZFE/iMrWhe+tiTOFN9WvcEdjLI8LYQ==}
+    engines: {node: '>= 0.13.2'}
+    peerDependencies:
+      three: '>= 0.152.0 < 0.164.0'
+    dependencies:
+      three: 0.163.0
+    dev: false
+
+  /three@0.163.0:
+    resolution: {integrity: sha512-HlMgCb2TF/dTLRtknBnjUTsR8FsDqBY43itYop2+Zg822I+Kd0Ua2vs8CvfBVefXkBdNDrLMoRTGCIIpfCuDew==}
+    dev: false

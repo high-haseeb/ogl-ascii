@@ -53,7 +53,7 @@ googleLink.addEventListener('click', e => {
 
 // Simulation section
 
-const canvas = document.getElementsByTagName('canvas')[0];
+const canvas = document.getElementById('flow');
 resizeCanvas();
 
 let config = {
