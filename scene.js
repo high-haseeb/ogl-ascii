@@ -317,7 +317,7 @@ async function initScene() {
                                 vec3 white = vec3(1., 1., 1.);
                                 vec3 yellow = vec3(0.2, 0.2, 0.2);
                                 vec3 black = vec3(0., 0., 0.4);
-                                vec3 color = mix(white, yellow, smoothstep(0., 1., length(vUv)));
+                                vec3 color = mix(white, yellow, smoothstep(0., 1., distance(vUv, vec2(0.5))));
                                 // color += mix(white, yellow, smoothstep(0., 1., 1. - vUv.y));
                                 // color += mix(white, yellow, smoothstep(0., 1., vUv.y));
                                 color += dot(vNormal, black);
