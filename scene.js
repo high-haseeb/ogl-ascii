@@ -1,17 +1,10 @@
-import {
-    Renderer,
-    Orbit,
-    Program,
-    Transform,
-    Vec3,
-    Polyline,
-    Camera,
-    Mesh,
-    Vec2,
-    Post,
-    Texture,
-    GLTFLoader
-} from "https://cdn.skypack.dev/ogl";
+import { Renderer, Program, Transform, Vec3, Polyline, Camera, Mesh, Vec2, Post, Texture, GLTFLoader } from "https://cdn.skypack.dev/ogl";
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+const DEG2RAD = 180 / Math.PI;
 
 const fragment = /* gjlsl */ `
                 precision highp float;
@@ -35,12 +28,12 @@ const fragment = /* gjlsl */ `
 
 
                 void main() {
-                    vec2 cell = uResolution / 30.0;
+                    vec2 cell = uResolution / 24.0;
                     vec2 grid = 1.0 / cell;
-                    vec2 pixelizedUV = grid * (0.5 + floor(vUv / grid));
+                    vec2 pixelizedUV = 1.0/500.0 * (0.5 + floor(vUv / (1.0/500.0)));
                     vec4 pixelized = texture2D(tMap, pixelizedUV);
                     float greyscaled = 1.0 - greyscale(pixelized.rgb).r;
-                    // vec4 raw = texture2D(tMap, vUv);
+                    // vec4 raw = texture2D(tMap, pixelizedUV);
 
                     float characterIndex = floor((uCharactersCount - 1.0) * greyscaled);
                     vec2 characterPosition = vec2(mod(characterIndex, SIZE.x), floor(characterIndex / SIZE.y));
@@ -80,7 +73,9 @@ const vertex = `
                 vec2 tangent = normalize(nextScreen - prevScreen);
                 vec2 normal = vec2(-tangent.y, tangent.x);
                 normal /= aspect;
+                // normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
                 normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
+                // normal *= cos(uv.y * 12.56) * 0.1 + 0.2;
 
                 float pixelWidth = 1.0 / (uResolution.y / uDPR);
                 normal *= pixelWidth * uThickness;
@@ -114,9 +109,8 @@ const vertex = `
     const lines = [];
 
     const camera = new Camera(gl, { near: 1, far: 1000 });
-    camera.position.set(0, 0, -10);
-    // camera.position.set(2,2, 2);
-    const controls = new Orbit(camera);
+    camera.position.set(0, 0, -12);
+    camera.lookAt([0, 0, 0]);
 
     function resize() {
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -130,83 +124,75 @@ const vertex = `
 
     const scene = new Transform();
 
-    let gltf;
-
-    // textures
-    // const lutTexture = TextureLoader.load(gl, {
-    //     src: "assets/lut.png",
-    // });
-    // const envDiffuseTexture = TextureLoader.load(gl, {
-    //     src: "assets/sunset-diffuse-RGBM.png",
-    // });
-    // const envSpecularTexture = TextureLoader.load(gl, {
-    //     src: "assets/sunset-specular-RGBM.png",
-    // });
-
-
     function random(a, b) {
         const alpha = Math.random();
         return a * (1.0 - alpha) + b * alpha;
     }
+    const mouse = new Vec3();
 
-    ["blue", "red", "green", "cyan", "cyan"].forEach((color, i) => {
-       const line = {
-            spring: random(0.02, 0.8),
-            friction: random(0.7, 0.95),
-            mouseVelocity: new Vec3(),
-            mouseOffset: new Vec3(random(-1, 1) * 0.05),
-        };
-        const count = 40;
-        const points = (line.points = []);
-        for (let i = 0; i < count; i++) points.push(new Vec3());
+    function initPolyLines() {
+        [new Vec3(0, 1, 0)].forEach((color, i) => {
+            const line = {
+                // spring: random(0.02, 0.8),
+                // friction: random(0.7, 0.95),
+                // mouseVelocity: new Vec3(),
+                // mouseOffset: new Vec3(random(-1, 1) * 0.05),
+                spring: 0.1,
+                friction: 0.8,
+                mouseVelocity: new Vec3(),
+                mouseOffset: new Vec3(0),
+            };
+            const count = 40;
+            const points = (line.points = []);
+            for (let i = 0; i < count; i++) points.push(new Vec3());
 
-        line.polyline = new Polyline(gl, {
-            points,
-            vertex,
-            fragment: `
+            line.polyline = new Polyline(gl, {
+                points,
+                vertex,
+                fragment: `
             precision highp float;
             varying vec2 vUv;
             uniform vec2 uResolution;
             varying vec3 vPosition;
             uniform sampler2D tMap;
+            uniform float uTime;
+            uniform vec3 uMouse;
             void main(){
-                  // vec2 uv = vPosition.xy / uResolution;
 
                 // Calculate distance from the center
                 vec2 center = vec2(0.5);
-                float distance = length(vUv - center);
+                float distanceToCenter = length(vUv - center);
 
                 // Define gradient colors
-                vec3 startColor = vec3(1.0, 1.0, 1.); // Red
-                vec3 endColor = vec3(0.0, 0.0, 0.0);   // Blue
+                vec3 light = vec3(1.0, 1.0, 1.0); 
+                vec3 dark = vec3(0.0, 0.0, 0.0); 
 
-                // Calculate the interpolation factor based on distance
-                float fadeFactor = mix(0.0, 1.0, distance); // Adjust these values for the desired fade range
+                // Calculate the interpolation factor based on distanceToCenter
+                float fadeFactor = mix(0.0, 0.8, distanceToCenter); // Adjust these values for the desired fade range
 
                 // Interpolate between start and end colors
-                vec3 color = mix(startColor, endColor, fadeFactor);
-                color *= vec3(0., 1.,1.);
-
+                vec3 color = mix(light, dark, fadeFactor);
+                color *= vec3(0.0, 0.8, ( 1.0 + sin(uTime) ) / 2.0 + 0.5);
 
                 // Output final color
                 gl_FragColor = vec4(color, 1.0);
             }`,
-            uniforms: {
-                // uColor: { value: new Color(color) },
-                uThickness: { value: random(20, 100) },
-                uResolution: { value: new Vec2(window.innerWidth, window.innerHeight) },
-            },
+                uniforms: {
+                    uTime : {value : time },
+                    uMouse: { value: mouse },
+                    uThickness: { value: 40 },
+                    uResolution: { value: new Vec2(window.innerWidth, window.innerHeight) },
+                },
+            });
+
+            line.polyline.mesh.setParent(scene);
+
+            lines.push(line);
         });
-
-        line.polyline.mesh.setParent(scene);
-
-        lines.push(line);
-    });
+    }
 
     // ascii stuff
     const characters = [..."@MBHENR#KWXDFPQASUZbdehx*8Gm&04LOVYkpq5Tagns69owz$CIu23Jcfry%1v7l+it[] {}?j|()=~!-/<>\"^_';,:`.."];
-    // characters.reverse();
-    // const characters = " .:,'-^=*+?!|0#X%WM@"
     const fontSize = 54;
     const tex = createCharactersTexture(characters, fontSize);
     function createCharactersTexture(characters, fontSize) {
@@ -261,37 +247,38 @@ const vertex = `
         },
     });
 
-    const mouse = new Vec3();
-    if ("ontouchstart" in window) {
-        window.addEventListener("touchstart", updateMouse, false);
-        window.addEventListener("touchmove", updateMouse, false);
-    } else {
-        window.addEventListener("mousemove", updateMouse, false);
-    }
+    function addEventHandlers() {
+        function updateMouse(e) {
+            if (e.changedTouches && e.changedTouches.length) {
+                e.x = e.changedTouches[0].pageX;
+                e.y = e.changedTouches[0].pageY;
+            }
+            if (e.x === undefined) {
+                e.x = e.pageX;
+                e.y = e.pageY;
+            }
 
-    function updateMouse(e) {
-        if (e.changedTouches && e.changedTouches.length) {
-            e.x = e.changedTouches[0].pageX;
-            e.y = e.changedTouches[0].pageY;
-        }
-        if (e.x === undefined) {
-            e.x = e.pageX;
-            e.y = e.pageY;
+            // Get mouse value in -1 to 1 range, with y flipped
+            mouse.set((e.x / gl.renderer.width) * 2 - 1, (e.y / gl.renderer.height) * -2 + 1, 0);
         }
 
-        // Get mouse value in -1 to 1 range, with y flipped
-        mouse.set((e.x / gl.renderer.width) * 2 - 1, (e.y / gl.renderer.height) * -2 + 1, 0);
+        if ("ontouchstart" in window) {
+            window.addEventListener("touchstart", updateMouse, false);
+            window.addEventListener("touchmove", updateMouse, false);
+        } else {
+            window.addEventListener("mousemove", updateMouse, false);
+        }
     }
-    let mesh;
-async function initScene() {
-    // const geometry = new Box(gl);
-    const gltf = await GLTFLoader.load(gl, './assci.glb');
-    console.log(gltf.meshes[0].primitives[0].geometry)
-    const geometry = gltf.meshes[0].primitives[0].geometry;
-    console.log(gltf.meshes[0].primitives[0].rotation)
-    
-    const program = new Program(gl, {
-      vertex: /* glsl */ `
+
+    // load the model geometry doesnot load any materials
+    async function loadModel() {
+        let model;
+        const gltf = await GLTFLoader.load(gl, "./assci.glb");
+        const geometry = gltf.meshes[0].primitives[0].geometry;
+
+        const program = new Program(gl, {
+            uniforms: { uColor: { value: new Vec3(0, 0.5, 0) } },
+            vertex: /* glsl */ `
                             attribute vec3 position;
                             attribute vec3 normal;
                             attribute vec2 uv;
@@ -300,51 +287,84 @@ async function initScene() {
 
                             varying vec2 vUv;
                             varying vec3 vNormal;
+                            varying vec3 vPosition;
 
                             void main() {
                                 vUv = uv;
                                 vNormal = normal;
+                                vPosition = position;
                                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
                             }
                         `,
-      fragment: /* glsl */ `
+            fragment: /* glsl */ `
                             precision highp float;
 
                             varying vec2 vUv;
                             varying vec3 vNormal;
+                            varying vec3 vPosition;
+                            uniform vec3 uColor;
+
+                            vec3 white = vec3(1.);
+                            vec3 black = vec3(0.7);
+
+                            vec3 greyscale(vec3 color) {
+                                return vec3(dot(color, vec3(0.299, 0.587, 0.114)));
+                            }
+
+
                             void main() {
-                                vec3 cyan = vec3(0., 1., 1.);
-                                vec3 white = vec3(1., 1., 1.);
-                                vec3 yellow = vec3(0.2, 0.2, 0.2);
-                                vec3 black = vec3(0., 0., 0.4);
-                                vec3 color = mix(white, yellow, smoothstep(0., 1., distance(vUv, vec2(0.5))));
-                                // color += mix(white, yellow, smoothstep(0., 1., 1. - vUv.y));
-                                // color += mix(white, yellow, smoothstep(0., 1., vUv.y));
-                                color += dot(vNormal, black);
-                                color *= cyan; 
-                                gl_FragColor = vec4(color, 1.0);
+                                vec3 normal = normalize(vNormal * vNormal) + 0.2;
+                                vec3 grayscale = vec3(0, 2.0, 2.0) - greyscale(normal);
+                                // vec3 color = mix(white, black, grayscale);
+                                // color *= uColor;
+                                gl_FragColor = vec4(grayscale * uColor, 1.0);
                             }
                         `,
+        });
+
+        model = new Mesh(gl, { geometry, program });
+        model.setParent(scene);
+        return model;
+    }
+
+    // wait fot the model to load before starting
+    let model;
+    loadModel().then((mesh) => {
+        model = mesh;
+        initPolyLines();
+        addEventHandlers();
+        update();
+        console.log();
     });
-    mesh = new Mesh(gl, { geometry, program });
-        // mesh.rotation.x = -Math.PI;
-        // mesh.rotation.set( gltf.meshes[0].primitives[0].rotation)
-        const DEG2RAD = 180 / Math.PI
-        
-    mesh.rotation.x = 93 * DEG2RAD
-    mesh.rotation.x = -45  * DEG2RAD
-        mesh.rotation.z = 137 * DEG2RAD  
-        modelLoded = true;
-    mesh.setParent(scene);
-  }
-    let modelLoded = false;
-    initScene()
 
-    requestAnimationFrame(update);
-
-    const tmp = new Vec3();
-    function update() {
+    let time;
+    function update(t) {
         requestAnimationFrame(update);
+
+        updatePolyLines();
+        roatateModel(model, mouse);
+        time = t * 0.001;
+        model.program.uniforms.uColor.value.z = (Math.sin(time) + 1) / 2;
+
+        post.render({ scene, camera, sort: false, frustumCull: false });
+        // renderer.render({ scene, camera, sort: false, frustumCull: false });
+    }
+
+    // rotates the model depending of the mouse position
+    // mouse coords are already normalized :)
+    // rotates in 4 directions, clamped on x-axis
+    function roatateModel(model, mouse) {
+        const sensitivity = 0.005;
+        model.rotation.y += (mouse.x >= 0 ? 1 : -1) * sensitivity;
+        model.rotation.x += (mouse.y >= 0 ? 1 : -1) * sensitivity;
+        const minX = -10;
+        const maxX = 10;
+        model.rotation.x = clamp(model.rotation.x, minX, maxX);
+    }
+
+    // updates the line point to follow mouse
+    const tmp = new Vec3();
+    function updatePolyLines() {
         lines.forEach((line) => {
             // Update polyline input points
             for (let i = line.points.length - 1; i >= 0; i--) {
@@ -352,19 +372,14 @@ async function initScene() {
                     // For the first point, spring ease it to the mouse position
                     tmp.copy(mouse).add(line.mouseOffset).sub(line.points[i]).multiply(line.spring);
                     line.mouseVelocity.add(tmp).multiply(line.friction);
-                    line.points[i].add(line.mouseVelocity );
+                    line.points[i].add(line.mouseVelocity);
                 } else {
                     // The rest of the points ease to the point in front of them, making a line
                     line.points[i].lerp(line.points[i - 1], 0.9);
                 }
             }
             line.polyline.updateGeometry();
+            line.polyline.program.uniforms.uTime.value = time;
         });
-
-        // Replace Renderer.render with post.render. Use the same arguments.
-        controls.update();
-        if(modelLoded){ mesh.rotation.y += 0.01}
-        post.render({ scene, camera, sort: false, frustumCull: false });
-        // renderer.render({ scene, camera, sort: false, frustumCull: false });
     }
 }
