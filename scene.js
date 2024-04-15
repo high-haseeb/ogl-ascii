@@ -111,7 +111,7 @@ const vertex = /* glsl */ `
     const lines = [];
 
     const camera = new Camera(gl, { near: 1, far: 1000 });
-    camera.position.set(0, 0, -12);
+    camera.position.set(0, 0, -9);
     camera.lookAt([0, 0, 0]);
 
     function resize() {
@@ -319,27 +319,25 @@ float map(float value, float minInput, float maxInput, float minOutput, float ma
 void main() {
     // Normalize the interpolated normal
     vec3 normal = normalize(vNormal) * 0.5 + 0.5;
-    float factor = dot(normal, vec3(0., 0., 1.)) + map(sin(uTime), -1.0, 1.0, -0.3, 0.3);
+    float factor = dot(normal, vec3(0., 0., 1.)) ;//+ map(sin(uTime), -1.0, 1.0, -0.3, 0.3);
 
-
-    // Define gradient colors
     // Define gradient colors
     vec3 startColor = vec3(0.435, 0.937, 0.984); // #6FEFFB
     vec3 midColor = vec3(0.039, 0.102, 0.874);   // #0A1ADF
     vec3 endColor = vec3(0.0);   // #494949
 
     // Calculate the interpolation factors
-    float fadeFactorStart = smoothstep(0.0, 0.4, factor); // Bright center
-    float fadeFactorMid = smoothstep(0.5, 0.7, factor);   // Transition
-    float fadeFactorEnd = smoothstep(0.8, 1.0, factor);   // Fading out
+    float fadeFactorStart = smoothstep(0.0, 0.4, factor); 
+    float fadeFactorMid = smoothstep(0.5, 0.7, factor);   
+    float fadeFactorEnd = smoothstep(0.8, 1.0, factor);   
 
     // Interpolate between colors
     vec3 color = mix(startColor, midColor, fadeFactorStart);
-    color = mix(color, endColor, fadeFactorMid);
-    color = mix(color, vec3(1.) * startColor, fadeFactorEnd); // Fade to white
+    color      = mix(color, endColor, fadeFactorMid);
+    color      = mix(color, startColor, fadeFactorEnd);
 
     // Output final color
-    gl_FragColor = vec4(color ,1.0);
+    gl_FragColor = vec4(color,1.0);
 }
 `,
         });
