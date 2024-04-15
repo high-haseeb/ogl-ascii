@@ -1,4 +1,4 @@
-import { Renderer, Program, Transform, Vec3, Polyline, Camera, Mesh, Vec2, Post, Texture, GLTFLoader } from "https://cdn.skypack.dev/ogl";
+import { Renderer, Program, Transform, Box, Vec3, Polyline, Camera, Mesh, Vec2, Post, Texture, GLTFLoader } from "https://cdn.skypack.dev/ogl";
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -6,96 +6,98 @@ function clamp(value, min, max) {
 
 const DEG2RAD = 180 / Math.PI;
 
-const fragment = /* gjlsl */ `
-                precision highp float;
+// ascii characters shader
+const fragment = /* glsl */ `
+     precision highp float;
 
-                uniform sampler2D tMap;
-                uniform float uCharactersCount;
-                uniform sampler2D uCharacters;
-                uniform vec2 uResolution;
-                varying vec2 vUv;
+     uniform sampler2D tMap;
+     uniform float uCharactersCount;
+     uniform sampler2D uCharacters;
+     uniform vec2 uResolution;
+     varying vec2 vUv;
 
-                const vec2 SIZE = vec2(16.);
+     const vec2 SIZE = vec2(16.);
 
-                vec3 greyscale(vec3 color, float strength) {
-                    float g = dot(color, vec3(0.299, 0.587, 0.114));
-                    return mix(color, vec3(g), strength);
-                }
+     vec3 greyscale(vec3 color, float strength) {
+         float g = dot(color, vec3(0.299, 0.587, 0.114));
+         return mix(color, vec3(g), strength);
+     }
 
-                vec3 greyscale(vec3 color) {
-                    return greyscale(color, 1.0);
-                }
+     vec3 greyscale(vec3 color) {
+         return greyscale(color, 1.0);
+     }
 
 
-                void main() {
-                    vec2 cell = uResolution / 24.0;
-                    vec2 grid = 1.0 / cell;
-                    vec2 pixelizedUV = 1.0/500.0 * (0.5 + floor(vUv / (1.0/500.0)));
-                    vec4 pixelized = texture2D(tMap, pixelizedUV);
-                    float greyscaled = 1.0 - greyscale(pixelized.rgb).r;
-                    // vec4 raw = texture2D(tMap, pixelizedUV);
+     void main() {
+         vec2 cell = uResolution / 24.0;
+         vec2 grid = 1.0 / cell;
+         vec2 pixelizedUV = 1.0/500.0 * (0.5 + floor(vUv / (1.0/500.0)));
+         vec4 pixelized = texture2D(tMap, pixelizedUV);
+         float greyscaled = 1.0 - greyscale(pixelized.rgb).r;
+         // vec4 raw = texture2D(tMap, pixelizedUV);
 
-                    float characterIndex = floor((uCharactersCount - 1.0) * greyscaled);
-                    vec2 characterPosition = vec2(mod(characterIndex, SIZE.x), floor(characterIndex / SIZE.y));
-                    vec2 offset = vec2(characterPosition.x, -characterPosition.y) / SIZE;
-                    vec2 charUV = mod(vUv * (cell / SIZE), 1.0 / SIZE) - vec2(0., 1.0 / SIZE) + offset;
-                    vec4 asciiCharacter = texture2D(uCharacters, charUV);
+         float characterIndex = floor((uCharactersCount - 1.0) * greyscaled);
+         vec2 characterPosition = vec2(mod(characterIndex, SIZE.x), floor(characterIndex / SIZE.y));
+         vec2 offset = vec2(characterPosition.x, -characterPosition.y) / SIZE;
+         vec2 charUV = mod(vUv * (cell / SIZE), 1.0 / SIZE) - vec2(0., 1.0 / SIZE) + offset;
+         vec4 asciiCharacter = texture2D(uCharacters, charUV);
 
-                    asciiCharacter.rgb = pixelized.rgb *  asciiCharacter.r;
-                    asciiCharacter.a = pixelized.a; 
-                    gl_FragColor = asciiCharacter;
-                }
-            `;
+         asciiCharacter.rgb = pixelized.rgb *  asciiCharacter.r;
+         asciiCharacter.a = pixelized.a; 
+         gl_FragColor = asciiCharacter;
+     }
+`;
 
-const vertex = `
-            attribute vec3 position;
-            attribute vec3 next;
-            attribute vec3 prev;
-            attribute vec2 uv;
-            attribute float side;
+// mouse following shape shader
+const vertex = /* glsl */ `
+    attribute vec3 position;
+    attribute vec3 next;
+    attribute vec3 prev;
+    attribute vec2 uv;
+    attribute float side;
 
-            uniform vec2 uResolution;
-            uniform float uDPR;
-            uniform float uThickness;
+    uniform vec2 uResolution;
+    uniform float uDPR;
+    uniform float uThickness;
 
-            varying vec2 vUv;
-            varying vec3 vPosition;
+    varying vec2 vUv;
+    varying vec3 vPosition;
 
-            float random(vec2 st) {
-                return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123) / 43758.5453123;
-            }
+    float random(vec2 st) {
+        return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123) / 43758.5453123;
+    }
 
-            vec4 getPosition() {
-                vec2 aspect = vec2(uResolution.x / uResolution.y, 1);
-                vec2 nextScreen = next.xy * aspect;
-                vec2 prevScreen = prev.xy * aspect;
+    vec4 getPosition() {
+        vec2 aspect = vec2(uResolution.x / uResolution.y, 1);
+        vec2 nextScreen = next.xy * aspect;
+        vec2 prevScreen = prev.xy * aspect;
 
-                vec2 tangent = normalize(nextScreen - prevScreen);
-                vec2 normal = vec2(-tangent.y, tangent.x);
-                normal /= aspect;
-                // normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
-                normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
-                // normal *= cos(uv.y * 12.56) * 0.1 + 0.2;
+        vec2 tangent = normalize(nextScreen - prevScreen);
+        vec2 normal = vec2(-tangent.y, tangent.x);
+        normal /= aspect;
+        // normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
+        normal *= 1.0 - pow(abs(uv.y - 0.5) * 1.9, 2.0);
+        // normal *= cos(uv.y * 12.56) * 0.1 + 0.2;
 
-                float pixelWidth = 1.0 / (uResolution.y / uDPR);
-                normal *= pixelWidth * uThickness;
+        float pixelWidth = 1.0 / (uResolution.y / uDPR);
+        normal *= pixelWidth * uThickness;
 
-                // When the points are on top of each other, shrink the line to avoid artifacts.
-                float dist = length(nextScreen - prevScreen);
-                normal *= smoothstep(0.0, 0.02, dist);
+        // When the points are on top of each other, shrink the line to avoid artifacts.
+        float dist = length(nextScreen - prevScreen);
+        normal *= smoothstep(0.0, 0.02, dist);
 
-                vec4 current = vec4(position, 1);
-                current.xy -= normal * side;
-                return current;
-            }
+        vec4 current = vec4(position, 1);
+        current.xy -= normal * side;
+        return current;
+    }
 
-            void main() {
-                vUv = uv;
-                vec4 pos = getPosition();
-                vPosition = pos.xyz;
-                gl_Position = pos;
-            }
-        `;
+    void main() {
+        vUv = uv;
+        vec4 pos = getPosition();
+        vPosition = pos.xyz;
+        gl_Position = pos;
+    }
+`;
 
 {
     const renderer = new Renderer({ dpr: 2 });
@@ -124,25 +126,23 @@ const vertex = `
 
     const scene = new Transform();
 
-    function random(a, b) {
-        const alpha = Math.random();
-        return a * (1.0 - alpha) + b * alpha;
-    }
     const mouse = new Vec3();
+    // const  random = (min, max) =>  Math.random() * (max - min) + min;
 
     function initPolyLines() {
-        [new Vec3(0, 1, 0)].forEach((color, i) => {
+        [""].forEach((_v, _i) => {
             const line = {
+                // if using multiple trails enable these
                 // spring: random(0.02, 0.8),
                 // friction: random(0.7, 0.95),
                 // mouseVelocity: new Vec3(),
                 // mouseOffset: new Vec3(random(-1, 1) * 0.05),
-                spring: 0.1,
+                spring: 0.2,
                 friction: 0.8,
                 mouseVelocity: new Vec3(),
-                mouseOffset: new Vec3(0),
+                mouseOffset: new Vec3(0.0),
             };
-            const count = 40;
+            const count = 20; // the length of the trail
             const points = (line.points = []);
             for (let i = 0; i < count; i++) points.push(new Vec3());
 
@@ -150,35 +150,41 @@ const vertex = `
                 points,
                 vertex,
                 fragment: `
-            precision highp float;
-            varying vec2 vUv;
-            uniform vec2 uResolution;
-            varying vec3 vPosition;
-            uniform sampler2D tMap;
-            uniform float uTime;
-            uniform vec3 uMouse;
-            void main(){
+precision highp float;
+varying vec2 vUv;
+uniform vec2 uResolution;
+varying vec3 vPosition;
+uniform sampler2D tMap;
+uniform float uTime;
+uniform vec3 uMouse;
 
-                // Calculate distance from the center
-                vec2 center = vec2(0.5);
-                float distanceToCenter = length(vUv - center);
+void main() {
+vec2 center = vec2(0.5);
+    float distanceToCenter = length(vUv - center);
 
-                // Define gradient colors
-                vec3 light = vec3(1.0, 1.0, 1.0); 
-                vec3 dark = vec3(0.0, 0.0, 0.0); 
+    // Define gradient colors
+    vec3 startColor = vec3(0.435, 0.937, 0.984); // #6FEFFB
+    vec3 midColor = vec3(0.039, 0.102, 0.874);   // #0A1ADF
+    vec3 endColor = vec3(0.0);   // #494949
 
-                // Calculate the interpolation factor based on distanceToCenter
-                float fadeFactor = mix(0.0, 0.8, distanceToCenter); // Adjust these values for the desired fade range
+    // Calculate the interpolation factors
+    float fadeFactorStart = smoothstep(0.0, 0.3, distanceToCenter); // Bright center
+    float fadeFactorMid = smoothstep(0.2, 0.6, distanceToCenter);   // Transition
+    float fadeFactorEnd = smoothstep(0.5, 1.0, distanceToCenter);   // Fading out
 
-                // Interpolate between start and end colors
-                vec3 color = mix(light, dark, fadeFactor);
-                color *= vec3(0.0, 0.8, ( 1.0 + sin(uTime) ) / 2.0 + 0.5);
+    // Interpolate between colors
+    vec3 color = mix(startColor, midColor, fadeFactorStart);
+    color = mix(color, endColor, fadeFactorMid);
+    color = mix(color, vec3(1.0), fadeFactorEnd); // Fade to white
 
-                // Output final color
-                gl_FragColor = vec4(color, 1.0);
-            }`,
+    // Apply time-based variation to the color
+    // float timeFactor = (1.0 + sin(uTime)) / 2.0;
+    // color *= vec3(0.0, 0.8, timeFactor);
+
+    // Output final color
+    gl_FragColor = vec4(color, 1.0);            }`,
                 uniforms: {
-                    uTime : {value : time },
+                    uTime: { value: time },
                     uMouse: { value: mouse },
                     uThickness: { value: 40 },
                     uResolution: { value: new Vec2(window.innerWidth, window.innerHeight) },
@@ -270,60 +276,78 @@ const vertex = `
         }
     }
 
-    // load the model geometry doesnot load any materials
+    // load the model geometry [doesnot load any materials]
     async function loadModel() {
         let model;
         const gltf = await GLTFLoader.load(gl, "./assci.glb");
         const geometry = gltf.meshes[0].primitives[0].geometry;
 
         const program = new Program(gl, {
-            uniforms: { uColor: { value: new Vec3(0, 0.5, 0) } },
+            uniforms: { uColor: { value: new Vec3(0, 0.5, 0) }, uTime: { value: 0 } },
             vertex: /* glsl */ `
-                            attribute vec3 position;
-                            attribute vec3 normal;
-                            attribute vec2 uv;
-                            uniform mat4 modelViewMatrix;
-                            uniform mat4 projectionMatrix;
+                attribute vec3 position;
+                attribute vec3 normal;
+                attribute vec2 uv;
+                uniform mat4 modelViewMatrix;
+                uniform mat4 projectionMatrix;
 
-                            varying vec2 vUv;
-                            varying vec3 vNormal;
-                            varying vec3 vPosition;
+                varying vec2 vUv;
+                varying vec3 vNormal;
+                varying vec3 vPosition;
 
-                            void main() {
-                                vUv = uv;
-                                vNormal = normal;
-                                vPosition = position;
-                                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
-                            }
-                        `,
+                void main() {
+                    vUv = uv;
+                    vNormal = normal;
+                    vPosition = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
+                }
+            `,
             fragment: /* glsl */ `
-                            precision highp float;
+precision highp float;
 
-                            varying vec2 vUv;
-                            varying vec3 vNormal;
-                            varying vec3 vPosition;
-                            uniform vec3 uColor;
-
-                            vec3 white = vec3(1.);
-                            vec3 black = vec3(0.7);
-
-                            vec3 greyscale(vec3 color) {
-                                return vec3(dot(color, vec3(0.299, 0.587, 0.114)));
-                            }
+varying vec3 vNormal;
+varying vec3 vPosition;
+varying vec2 vUv;
+uniform vec3 uColor;
+uniform float uTime;
 
 
-                            void main() {
-                                vec3 normal = normalize(vNormal * vNormal) + 0.2;
-                                vec3 grayscale = vec3(0, 2.0, 2.0) - greyscale(normal);
-                                // vec3 color = mix(white, black, grayscale);
-                                // color *= uColor;
-                                gl_FragColor = vec4(grayscale * uColor, 1.0);
-                            }
-                        `,
+float map(float value, float minInput, float maxInput, float minOutput, float maxOutput) {
+    // Map the input value from the input range to the output range
+    return minOutput + (maxOutput - minOutput) * ((value - minInput) / (maxInput - minInput));
+}
+void main() {
+    // Normalize the interpolated normal
+    vec3 normal = normalize(vNormal) * 0.5 + 0.5;
+    float factor = dot(normal, vec3(0., 0., 1.)) + map(sin(uTime), -1.0, 1.0, -0.3, 0.3);
+
+
+    // Define gradient colors
+    // Define gradient colors
+    vec3 startColor = vec3(0.435, 0.937, 0.984); // #6FEFFB
+    vec3 midColor = vec3(0.039, 0.102, 0.874);   // #0A1ADF
+    vec3 endColor = vec3(0.0);   // #494949
+
+    // Calculate the interpolation factors
+    float fadeFactorStart = smoothstep(0.0, 0.4, factor); // Bright center
+    float fadeFactorMid = smoothstep(0.5, 0.7, factor);   // Transition
+    float fadeFactorEnd = smoothstep(0.8, 1.0, factor);   // Fading out
+
+    // Interpolate between colors
+    vec3 color = mix(startColor, midColor, fadeFactorStart);
+    color = mix(color, endColor, fadeFactorMid);
+    color = mix(color, vec3(1.) * startColor, fadeFactorEnd); // Fade to white
+
+    // Output final color
+    gl_FragColor = vec4(color ,1.0);
+}
+`,
         });
 
         model = new Mesh(gl, { geometry, program });
         model.setParent(scene);
+        model.rotation.x = Math.PI / 3;
+        model.rotation.z = Math.PI * 0.6;
         return model;
     }
 
@@ -344,7 +368,7 @@ const vertex = `
         updatePolyLines();
         roatateModel(model, mouse);
         time = t * 0.001;
-        model.program.uniforms.uColor.value.z = (Math.sin(time) + 1) / 2;
+        model.program.uniforms.uTime.value = time;
 
         post.render({ scene, camera, sort: false, frustumCull: false });
         // renderer.render({ scene, camera, sort: false, frustumCull: false });
@@ -353,13 +377,14 @@ const vertex = `
     // rotates the model depending of the mouse position
     // mouse coords are already normalized :)
     // rotates in 4 directions, clamped on x-axis
+    let rotateX = 0;
     function roatateModel(model, mouse) {
         const sensitivity = 0.005;
         model.rotation.y += (mouse.x >= 0 ? 1 : -1) * sensitivity;
-        model.rotation.x += (mouse.y >= 0 ? 1 : -1) * sensitivity;
+        rotateX += (mouse.y >= 0 ? 1 : -1) * sensitivity;
         const minX = -10;
         const maxX = 10;
-        model.rotation.x = clamp(model.rotation.x, minX, maxX);
+        model.rotation.z = clamp(rotateX, minX, maxX);
     }
 
     // updates the line point to follow mouse
