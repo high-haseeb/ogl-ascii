@@ -116,7 +116,7 @@ const vertex = /* glsl */ `
     const renderer = new Renderer({ dpr: 2 });
     const gl = renderer.gl;
     document.body.appendChild(gl.canvas);
-    // gl.canvas.style.opacity = 0.7
+    gl.canvas.style.opacity = 0.7
     console.log(gl.canvas.style.opacity);
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
 
