@@ -1,4 +1,17 @@
-import { Renderer, Program, Transform, Box, Vec3, Polyline, Camera, Mesh, Vec2, Post, Texture, GLTFLoader } from "https://cdn.skypack.dev/ogl";
+import {
+    Renderer,
+    Program,
+    Transform,
+    Box,
+    Vec3,
+    Polyline,
+    Camera,
+    Mesh,
+    Vec2,
+    Post,
+    Texture,
+    GLTFLoader,
+} from "https://cdn.skypack.dev/ogl";
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -29,12 +42,12 @@ const fragment = /* glsl */ `
 
 
      void main() {
-         vec2 cell = uResolution / 24.0;
+         vec2 cell = uResolution / SIZE;
          vec2 grid = 1.0 / cell;
-         vec2 pixelizedUV = 1.0/500.0 * (0.5 + floor(vUv / (1.0/500.0)));
+         vec2 pixelizedUV = grid * (0.5 + floor(vUv / (grid)));
          vec4 pixelized = texture2D(tMap, pixelizedUV);
          float greyscaled = 1.0 - greyscale(pixelized.rgb).r;
-         // vec4 raw = texture2D(tMap, pixelizedUV);
+         vec4 raw = texture2D(tMap, vUv);
 
          float characterIndex = floor((uCharactersCount - 1.0) * greyscaled);
          vec2 characterPosition = vec2(mod(characterIndex, SIZE.x), floor(characterIndex / SIZE.y));
@@ -42,7 +55,7 @@ const fragment = /* glsl */ `
          vec2 charUV = mod(vUv * (cell / SIZE), 1.0 / SIZE) - vec2(0., 1.0 / SIZE) + offset;
          vec4 asciiCharacter = texture2D(uCharacters, charUV);
 
-         asciiCharacter.rgb = pixelized.rgb *  asciiCharacter.r;
+         asciiCharacter.rgb = raw.rgb * asciiCharacter.r;
          asciiCharacter.a = pixelized.a; 
          gl_FragColor = asciiCharacter;
      }
@@ -103,6 +116,8 @@ const vertex = /* glsl */ `
     const renderer = new Renderer({ dpr: 2 });
     const gl = renderer.gl;
     document.body.appendChild(gl.canvas);
+    // gl.canvas.style.opacity = 0.7
+    console.log(gl.canvas.style.opacity);
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
 
     const post = new Post(gl);
@@ -127,10 +142,10 @@ const vertex = /* glsl */ `
     const scene = new Transform();
 
     const mouse = new Vec3();
-    // const  random = (min, max) =>  Math.random() * (max - min) + min;
+    const random = (min, max) => Math.random() * (max - min) + min;
 
     function initPolyLines() {
-        [""].forEach((_v, _i) => {
+        Array.from({ length: 1 }).forEach((_v, _i) => {
             const line = {
                 // if using multiple trails enable these
                 // spring: random(0.02, 0.8),
@@ -173,21 +188,25 @@ vec2 center = vec2(0.5);
     float fadeFactorEnd = smoothstep(0.5, 1.0, distanceToCenter);   // Fading out
 
     // Interpolate between colors
-    vec3 color = mix(startColor, midColor, fadeFactorStart);
-    color = mix(color, endColor, fadeFactorMid);
-    color = mix(color, vec3(1.0), fadeFactorEnd); // Fade to white
+    vec3 color = vec3( mix(startColor, midColor, fadeFactorStart));
+    color += mix(color, endColor, fadeFactorMid);
+    color += mix(color, vec3(0.0), fadeFactorEnd); // Fade to white
 
     // Apply time-based variation to the color
     // float timeFactor = (1.0 + sin(uTime)) / 2.0;
     // color *= vec3(0.0, 0.8, timeFactor);
 
     // Output final color
-    gl_FragColor = vec4(color, 1.0);            }`,
+    gl_FragColor.rgb = color;
+    gl_FragColor.a = 1.0;
+}`,
                 uniforms: {
                     uTime: { value: time },
                     uMouse: { value: mouse },
                     uThickness: { value: 40 },
-                    uResolution: { value: new Vec2(window.innerWidth, window.innerHeight) },
+                    uResolution: {
+                        value: new Vec2(window.innerWidth, window.innerHeight),
+                    },
                 },
             });
 
@@ -198,7 +217,8 @@ vec2 center = vec2(0.5);
     }
 
     // ascii stuff
-    const characters = [..."@MBHENR#KWXDFPQASUZbdehx*8Gm&04LOVYkpq5Tagns69owz$CIu23Jcfry%1v7l+it[] {}?j|()=~!-/<>\"^_';,:`.."];
+    const characters = [..." .:`-=+*/10"];
+    characters.reverse();
     const fontSize = 54;
     const tex = createCharactersTexture(characters, fontSize);
     function createCharactersTexture(characters, fontSize) {
@@ -265,7 +285,11 @@ vec2 center = vec2(0.5);
             }
 
             // Get mouse value in -1 to 1 range, with y flipped
-            mouse.set((e.x / gl.renderer.width) * 2 - 1, (e.y / gl.renderer.height) * -2 + 1, 0);
+            mouse.set(
+                (e.x / gl.renderer.width) * 2 - 1,
+                (e.y / gl.renderer.height) * -2 + 1,
+                0,
+            );
         }
 
         if ("ontouchstart" in window) {
@@ -311,42 +335,21 @@ varying vec2 vUv;
 uniform vec3 uColor;
 uniform float uTime;
 
-
-float map(float value, float minInput, float maxInput, float minOutput, float maxOutput) {
-    // Map the input value from the input range to the output range
-    return minOutput + (maxOutput - minOutput) * ((value - minInput) / (maxInput - minInput));
-}
 void main() {
-    // Normalize the interpolated normal
     vec3 normal = normalize(vNormal) * 0.5 + 0.5;
-    float factor = dot(normal, vec3(0., 0., 1.)) ;//+ map(sin(uTime), -1.0, 1.0, -0.3, 0.3);
 
-    // Define gradient colors
-    vec3 startColor = vec3(0.435, 0.937, 0.984); // #6FEFFB
-    vec3 midColor = vec3(0.039, 0.102, 0.874);   // #0A1ADF
-    vec3 endColor = vec3(0.0);   // #494949
-
-    // Calculate the interpolation factors
-    float fadeFactorStart = smoothstep(0.0, 0.4, factor); 
-    float fadeFactorMid = smoothstep(0.5, 0.7, factor);   
-    float fadeFactorEnd = smoothstep(0.8, 1.0, factor);   
-
-    // Interpolate between colors
-    vec3 color = mix(startColor, midColor, fadeFactorStart);
-    color      = mix(color, endColor, fadeFactorMid);
-    color      = mix(color, startColor, fadeFactorEnd);
-
-    // Output final color
-    factor += (1.0 + sin(uTime * 0.5)) / 2.0;
-    gl_FragColor = vec4(vec3(factor),1.0);
+    vec3 color = 1.0 -  normal ;//+ vec3(vUv, 0.5) ;//* (1.0 + sin(uTime) / 2.0);
+    float grayscale = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    gl_FragColor = vec4(vec3(grayscale), 0.0);
+    
 }
 `,
         });
 
         model = new Mesh(gl, { geometry, program });
         model.setParent(scene);
-        model.rotation.x = Math.PI / 3;
-        model.rotation.z = Math.PI * 0.6;
+        // model.rotation.x = Math.PI / 2;
+        // model.rotation.z = Math.PI * 0.6;
         return model;
     }
 
@@ -374,16 +377,17 @@ void main() {
     }
 
     // rotates the model depending of the mouse position
-    // mouse coords are already normalized :)
-    // rotates in 4 directions, clamped on x-axis
-    let rotateX = 0;
+    const temp = new Vec3();
+    const rotation_x_correction = (Math.PI / 2) * -1.5;
+    const rotation_y_correction = Math.PI / 2;
     function roatateModel(model, mouse) {
-        const sensitivity = 0.005;
-        model.rotation.y += (mouse.x >= 0 ? 1 : -1) * sensitivity;
-        rotateX += (mouse.y >= 0 ? 1 : -1) * sensitivity;
-        const minX = -10;
-        const maxX = 10;
-        model.rotation.z = clamp(rotateX, minX, maxX);
+        temp.lerp([-mouse.y * 2.0, mouse.x * 2.0, 0.0], 0.006);
+
+        model.rotation.set(
+            temp.x + rotation_x_correction,
+            temp.y + rotation_y_correction,
+            Math.PI / 2,
+        );
     }
 
     // updates the line point to follow mouse
@@ -394,7 +398,19 @@ void main() {
             for (let i = line.points.length - 1; i >= 0; i--) {
                 if (!i) {
                     // For the first point, spring ease it to the mouse position
-                    tmp.copy(mouse).add(line.mouseOffset).sub(line.points[i]).multiply(line.spring);
+                    // mouse.x += Math.random() * 0.01
+                    // mouse.y += Math.random() * 0.01
+                    tmp
+                        .copy(mouse)
+                        .add(line.mouseOffset)
+                        .sub(line.points[i])
+                        .multiply(line.spring);
+                    tmp
+                        .copy(mouse)
+                        .add(line.mouseOffset)
+                        .sub(line.points[i])
+                        .multiply(line.spring);
+                    line.mouseVelocity.add(tmp).multiply(line.friction);
                     line.mouseVelocity.add(tmp).multiply(line.friction);
                     line.points[i].add(line.mouseVelocity);
                 } else {
