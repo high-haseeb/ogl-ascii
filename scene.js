@@ -337,7 +337,8 @@ void main() {
     color      = mix(color, startColor, fadeFactorEnd);
 
     // Output final color
-    gl_FragColor = vec4(color,1.0);
+    factor += (1.0 + sin(uTime * 0.5)) / 2.0;
+    gl_FragColor = vec4(vec3(factor),1.0);
 }
 `,
         });
